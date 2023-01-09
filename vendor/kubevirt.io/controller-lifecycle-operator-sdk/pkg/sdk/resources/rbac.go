@@ -86,6 +86,9 @@ func (b *ResourceBuilder) CreateServiceAccount(name string) *corev1.ServiceAccou
 			Name:   name,
 			Labels: b.WithCommonLabels(nil),
 		},
+		ImagePullSecrets: []corev1.LocalObjectReference{
+			{Name: "deckhouse-registry"},
+		},
 	}
 }
 

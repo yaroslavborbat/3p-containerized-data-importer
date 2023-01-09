@@ -1642,6 +1642,9 @@ func (r *DatavolumeReconciler) createExpansionPod(pvc *corev1.PersistentVolumeCl
 					},
 				},
 			},
+			ImagePullSecrets: []corev1.LocalObjectReference{
+				{Name: "cdi-deckhouse-registry"},
+			},
 			NodeSelector: workloadNodePlacement.NodeSelector,
 			Tolerations:  workloadNodePlacement.Tolerations,
 			Affinity:     workloadNodePlacement.Affinity,

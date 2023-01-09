@@ -1011,6 +1011,9 @@ func makeNodeImporterPodSpec(args *importerPodArgs) *corev1.Pod {
 					},
 				},
 			},
+			ImagePullSecrets: []corev1.LocalObjectReference{
+				{Name: "cdi-deckhouse-registry"},
+			},
 			RestartPolicy:     corev1.RestartPolicyOnFailure,
 			Volumes:           volumes,
 			NodeSelector:      args.workloadNodePlacement.NodeSelector,

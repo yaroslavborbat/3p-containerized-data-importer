@@ -822,6 +822,9 @@ func (r *UploadReconciler) makeUploadPodSpec(args UploadPodArgs, resourceRequire
 					},
 				},
 			},
+			ImagePullSecrets: []corev1.LocalObjectReference{
+				{Name: "cdi-deckhouse-registry"},
+			},
 			NodeSelector:      workloadNodePlacement.NodeSelector,
 			Tolerations:       workloadNodePlacement.Tolerations,
 			Affinity:          workloadNodePlacement.Affinity,
