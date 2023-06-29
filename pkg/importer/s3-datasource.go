@@ -95,7 +95,7 @@ func (sd *S3DataSource) Transfer(path string) (ProcessingPhase, error) {
 
 	size, _ := util.GetAvailableSpace(path)
 	if size <= int64(0) {
-		//Path provided is invalid.
+		// Path provided is invalid.
 		return ProcessingPhaseError, ErrInvalidPath
 	}
 
@@ -213,4 +213,16 @@ func extractBucketAndObject(s string) (string, string) {
 	bucket := pathSplit[0]
 	object := strings.Join(pathSplit[1:], s3FolderSep)
 	return bucket, object
+}
+
+func (sd *S3DataSource) ReadCloser() (io.ReadCloser, error) {
+	panic("not implemented")
+}
+
+func (sd *S3DataSource) Length() (int, error) {
+	panic("not implemented")
+}
+
+func (sd *S3DataSource) Filename() (string, error) {
+	panic("not implemented")
 }

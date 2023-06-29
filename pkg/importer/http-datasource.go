@@ -485,3 +485,24 @@ func getExtraHeadersFromSecrets() ([]string, error) {
 
 	return secretExtraHeaders, err
 }
+
+func (hs *HTTPDataSource) ReadCloser() (io.ReadCloser, error) {
+	if hs.readers == nil {
+		var err error
+		hs.readers, err = NewFormatReaders(hs.httpReader, hs.contentLength)
+		if err != nil {
+			klog.Errorf("Error creating readers: %v", err)
+			return nil, err
+		}
+	}
+
+	return hs.readers.TopReader(), nil
+}
+
+func (hs *HTTPDataSource) Length() (int, error) {
+	return int(hs.contentLength), nil
+}
+
+func (hs *HTTPDataSource) Filename() (string, error) {
+	return path.Base(hs.endpoint.Path), nil
+}

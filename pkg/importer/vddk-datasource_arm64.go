@@ -43,3 +43,15 @@ func NewVDDKDataSource(endpoint string, accessKey string, secKey string, thumbpr
 }
 
 var _ DataSourceInterface = &VDDKDataSource{}
+
+func (V VDDKDataSource) ReadCloser() (io.ReadCloser, error) {
+	panic("not implemented")
+}
+
+func (V VDDKDataSource) Length() (int, error) {
+	panic("not implemented")
+}
+
+func (V VDDKDataSource) Filename() (string, error) {
+	panic("not implemented")
+}

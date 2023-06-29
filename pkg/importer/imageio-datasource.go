@@ -131,7 +131,7 @@ func (is *ImageioDataSource) Transfer(path string) (ProcessingPhase, error) {
 	// we know that there won't be archives
 	size, _ := util.GetAvailableSpace(path)
 	if size <= int64(0) {
-		//Path provided is invalid.
+		// Path provided is invalid.
 		return ProcessingPhaseError, ErrInvalidPath
 	}
 	is.readers.StartProgressUpdate()
@@ -1471,4 +1471,16 @@ func getOvirtClient(ep string, accessKey string, secKey string, certDir string) 
 	return &ConnectionWrapper{
 		conn: conn,
 	}, err
+}
+
+func (is *ImageioDataSource) ReadCloser() (io.ReadCloser, error) {
+	panic("not implemented")
+}
+
+func (is *ImageioDataSource) Length() (int, error) {
+	panic("not implemented")
+}
+
+func (is *ImageioDataSource) Filename() (string, error) {
+	panic("not implemented")
 }

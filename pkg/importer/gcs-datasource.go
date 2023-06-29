@@ -122,7 +122,7 @@ func (sd *GCSDataSource) Transfer(path string) (ProcessingPhase, error) {
 	size, _ := util.GetAvailableSpace(path)
 
 	if size <= int64(0) {
-		//Path provided is invalid.
+		// Path provided is invalid.
 		klog.V(3).Infoln("GCS Importer: Transfer Error: ", ErrInvalidPath)
 		return ProcessingPhaseError, ErrInvalidPath
 	}
@@ -203,4 +203,16 @@ func extractGcsBucketObjectAndHost(s string) (string, string, string) {
 	klog.V(3).Infoln("GCS Importer: GCS Bucket:", bucket)
 	klog.V(3).Infoln("GCS Importer: GCS Object:", object)
 	return bucket, object, host
+}
+
+func (sd *GCSDataSource) ReadCloser() (io.ReadCloser, error) {
+	panic("not implemented")
+}
+
+func (sd *GCSDataSource) Length() (int, error) {
+	panic("not implemented")
+}
+
+func (sd *GCSDataSource) Filename() (string, error) {
+	panic("not implemented")
 }

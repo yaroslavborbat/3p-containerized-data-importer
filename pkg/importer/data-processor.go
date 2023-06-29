@@ -18,6 +18,7 @@ package importer
 
 import (
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 
@@ -91,6 +92,10 @@ type DataSourceInterface interface {
 	GetURL() *url.URL
 	// Close closes any readers or other open resources.
 	Close() error
+
+	Filename() (string, error)
+	Length() (int, error)
+	ReadCloser() (io.ReadCloser, error)
 }
 
 // ResumableDataSource is the interface all resumeable data sources should implement

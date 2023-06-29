@@ -1,0 +1,14 @@
+version: "3"
+silent: true
+
+tasks:
+  cdi-registry-importer:build:
+    desc: "build"
+    cmds:
+      - docker build -t ghcr.io/werf/cdi-registry-importer:latest -f cdi-registry-importer.Dockerfile .
+
+  cdi-registry-importer:push:
+    desc: "build and push"
+    cmds:
+      - docker build -t ghcr.io/werf/cdi-registry-importer:latest -f cdi-registry-importer.Dockerfile .
+      - docker push ghcr.io/werf/cdi-registry-importer:latest
