@@ -2,16 +2,17 @@ package main
 
 import (
 	"archive/tar"
-	"compress/gzip"
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"strconv"
 
@@ -35,6 +36,12 @@ import (
 
 // FIXME(ilya-lesikov): certdir
 
+const (
+	imageLabelSourceImageSize        = "source-image-size"
+	imageLabelSourceImageVirtualSize = "source-image-virtual-size"
+	imageLabelSourceImageFormat      = "source-image-format"
+)
+
 func NewImporter() *Importer {
 	return &Importer{}
 }
@@ -46,13 +53,30 @@ type Importer struct {
 	srcUsername    string
 	srcPassword    string
 	srcInsecure    bool
-	dest           string
+	destImageName  string
 	destUsername   string
 	destPassword   string
 	destInsecure   bool
 	certDir        string
 	sha256Sum      string
 	md5Sum         string
+}
+
+type qemuImgInfo struct {
+	VirtualSize    int64  `json:"virtual-size"`
+	Filename       string `json:"filename"`
+	ClusterSize    int    `json:"cluster-size"`
+	Format         string `json:"format"`
+	ActualSize     int    `json:"actual-size"`
+	FormatSpecific struct {
+		Type string `json:"type"`
+		Data struct {
+			Compat          string `json:"compat"`
+			CompressionType string `json:"compression-type"`
+			RefcountBits    int    `json:"refcount-bits"`
+		} `json:"data"`
+	} `json:"format-specific"`
+	DirtyFlag bool `json:"dirty-flag"`
 }
 
 func (i *Importer) Run(ctx context.Context) error {
@@ -79,7 +103,7 @@ func (i *Importer) parseOptions() error {
 	i.srcType, _ = util.ParseEnvVar(common.ImporterSource, false)
 	i.srcContentType, _ = util.ParseEnvVar(common.ImporterContentType, false)
 	i.srcInsecure, _ = strconv.ParseBool(os.Getenv(common.InsecureTLSVar))
-	i.dest, _ = util.ParseEnvVar(common.ImporterDestinationEndpoint, false)
+	i.destImageName, _ = util.ParseEnvVar(common.ImporterDestinationEndpoint, false)
 	i.destInsecure, _ = strconv.ParseBool(os.Getenv(common.DestinationInsecureTLSVar))
 	i.sha256Sum, _ = util.ParseEnvVar(common.ImporterSHA256Sum, false)
 	i.md5Sum, _ = util.ParseEnvVar(common.ImporterMD5Sum, false)
@@ -112,7 +136,7 @@ func (i *Importer) parseOptions() error {
 				return fmt.Errorf("error parsing destination auth config: %w", err)
 			}
 
-			i.destUsername, i.destPassword, err = credsFromRegistryAuthFile(authFile, i.dest)
+			i.destUsername, i.destPassword, err = credsFromRegistryAuthFile(authFile, i.destImageName)
 			if err != nil {
 				return fmt.Errorf("error getting creds from destination auth config: %w", err)
 			}
@@ -123,7 +147,6 @@ func (i *Importer) parseOptions() error {
 }
 
 func (i *Importer) runForRegistry(ctx context.Context) error {
-	destImageName := fmt.Sprintf("%s:latest", i.dest)
 	srcNameOpts := i.srcNameOptions()
 	srcRemoteOpts := i.srcRemoteOptions(ctx)
 	destNameOpts := i.destNameOptions()
@@ -144,12 +167,12 @@ func (i *Importer) runForRegistry(ctx context.Context) error {
 		return fmt.Errorf("error getting source image from descriptor: %w", err)
 	}
 
-	destRef, err := name.ParseReference(destImageName, destNameOpts...)
+	destRef, err := name.ParseReference(i.destImageName, destNameOpts...)
 	if err != nil {
 		return fmt.Errorf("error parsing destination image name: %w", err)
 	}
 
-	klog.Infof("Writing image %q to registry", destImageName)
+	klog.Infof("Writing image %q to registry", i.destImageName)
 	if err := remote.Write(destRef, srcImage, destRemoteOpts...); err != nil {
 		return fmt.Errorf("error writing image to registry: %w", err)
 	}
@@ -159,22 +182,192 @@ func (i *Importer) runForRegistry(ctx context.Context) error {
 }
 
 func (i *Importer) runForDataSource(ctx context.Context) error {
-	ds, err := i.newDataSource(ctx)
-	if err != nil {
-		return fmt.Errorf("error creating data source: %w", err)
+	var sourceImageFilename string
+	var sourceImageSize int
+	var sourceImageReader io.ReadCloser
+	{
+		ds, err := i.newDataSource(ctx)
+		if err != nil {
+			return fmt.Errorf("error creating data source: %w", err)
+		}
+		defer ds.Close()
+
+		sourceImageFilename, err = ds.Filename()
+		if err != nil {
+			return fmt.Errorf("error getting source filename: %w", err)
+		}
+
+		sourceImageSize, err = ds.Length()
+		if err != nil {
+			return fmt.Errorf("error getting source image size: %w", err)
+		}
+
+		sourceImageReader, err = ds.ReadCloser()
+		if err != nil {
+			return fmt.Errorf("error getting source image reader: %w", err)
+		}
 	}
-	defer ds.Close()
+
+	// Wrap data source reader with progress and speed metrics.
+	progressMeterReader := NewProgressMeterReader(sourceImageReader, uint64(sourceImageSize))
+	progressMeterReader.StartTimedUpdate()
 
 	pipeReader, pipeWriter := nio.Pipe(buffer.New(64 * 1024 * 1024))
-
+	qemuImgInfoCh := make(chan qemuImgInfo)
 	errsGroup, ctx := errgroup.WithContext(ctx)
 	errsGroup.Go(func() error {
-		defer pipeWriter.Close()
-		return i.streamDataSourceToArchive(ctx, ds, pipeWriter)
+		return i.inspectAndStreamSourceImage(ctx, sourceImageFilename, sourceImageSize, progressMeterReader, pipeWriter, qemuImgInfoCh)
 	})
 	errsGroup.Go(func() error {
 		defer pipeReader.Close()
-		return i.uploadLayersAndImage(ctx, pipeReader)
+		return i.uploadLayersAndImage(ctx, pipeReader, sourceImageSize, qemuImgInfoCh)
+	})
+
+	return errsGroup.Wait()
+}
+
+func (i *Importer) inspectAndStreamSourceImage(ctx context.Context, sourceImageFilename string, sourceImageSize int, sourceImageReader io.ReadCloser, pipeWriter *nio.PipeWriter, qemuImgInfoCh chan qemuImgInfo) error {
+	var tarWriter *tar.Writer
+	{
+		tarWriter = tar.NewWriter(pipeWriter)
+		header := &tar.Header{
+			Name:     path.Join("disk", sourceImageFilename),
+			Size:     int64(sourceImageSize),
+			Mode:     0644,
+			Typeflag: tar.TypeReg,
+		}
+
+		if err := tarWriter.WriteHeader(header); err != nil {
+			return fmt.Errorf("error writing tar header: %w", err)
+		}
+	}
+
+	var checksumWriters []io.Writer
+	var checksumCheckFuncList []func() error
+	{
+		if i.sha256Sum != "" {
+			hash := sha256.New()
+			checksumWriters = append(checksumWriters, hash)
+			checksumCheckFuncList = append(checksumCheckFuncList, func() error {
+				sum := hex.EncodeToString(hash.Sum(nil))
+				if sum != i.sha256Sum {
+					return fmt.Errorf("sha256 sum mismatch: %s != %s", sum, i.sha256Sum)
+				}
+
+				return nil
+			})
+		}
+
+		if i.md5Sum != "" {
+			hash := md5.New()
+			checksumWriters = append(checksumWriters, hash)
+			checksumCheckFuncList = append(checksumCheckFuncList, func() error {
+				sum := hex.EncodeToString(hash.Sum(nil))
+				if sum != i.md5Sum {
+					return fmt.Errorf("md5 sum mismatch: %s != %s", sum, i.md5Sum)
+				}
+
+				return nil
+			})
+		}
+	}
+
+	var streamWriter io.Writer
+	{
+		writers := []io.Writer{tarWriter}
+		writers = append(writers, checksumWriters...)
+		streamWriter = io.MultiWriter(writers...)
+	}
+
+	const size64MB = 64 * 1024 * 1024
+	doneCh := make(chan int64)
+	errsGroup, ctx := errgroup.WithContext(ctx)
+
+	// Read 64MB from source to temp file and run qemu-img info.
+	errsGroup.Go(func() error {
+		// Create temp file.
+		var tempFile *os.File
+		var err error
+		{
+			klog.Infoln("Creating temp file")
+			tempFile, err = os.CreateTemp("", "tempfile")
+			if err != nil {
+				return fmt.Errorf("error creating temp file: %w", err)
+			}
+			defer os.Remove(tempFile.Name())
+		}
+
+		// Read 64MB from source.
+		{
+			klog.Infoln("Reading 64MB from source")
+			size, err := io.CopyN(io.MultiWriter(streamWriter, tempFile), sourceImageReader, size64MB)
+			if err != nil && err != io.EOF {
+				return fmt.Errorf("error reading data from source: %w", err)
+			}
+
+			if err := tempFile.Close(); err != nil {
+				return fmt.Errorf("error closing temp file: %w", err)
+			}
+
+			doneCh <- size
+		}
+
+		// Inspect image.
+		{
+			klog.Infoln("Running qemu-img info on temp file")
+			var out []byte
+			{
+				cmd := exec.CommandContext(ctx, "qemu-img", "info", "--output=json", tempFile.Name())
+				out, err = cmd.Output()
+				if err != nil {
+					return fmt.Errorf("error running qemu-img info: %w", err)
+				}
+			}
+
+			klog.Infoln("Parsing qemu-img info output:", string(out))
+			var info qemuImgInfo
+			if err = json.Unmarshal(out, &info); err != nil {
+				return fmt.Errorf("error parsing qemu-img info output: %w", err)
+			}
+
+			klog.Infoln("Sending qemu-img info")
+			qemuImgInfoCh <- info
+		}
+
+		return nil
+	})
+
+	// Stream the rest of the source image.
+	errsGroup.Go(func() error {
+		defer sourceImageReader.Close()
+		defer tarWriter.Close()
+		defer pipeWriter.Close()
+
+		doneSize := <-doneCh
+
+		klog.Infoln("Streaming the rest of the source image")
+		{
+			n, err := io.Copy(streamWriter, sourceImageReader)
+			if err != nil && err != io.EOF {
+				return fmt.Errorf("error copying file contents: %w", err)
+			}
+
+			doneSize += n
+
+			if doneSize != int64(sourceImageSize) {
+				return fmt.Errorf("source image size mismatch: %d != %d", doneSize, sourceImageSize)
+			}
+
+			for _, checksumCheckFunc := range checksumCheckFuncList {
+				if err := checksumCheckFunc(); err != nil {
+					return err
+				}
+			}
+		}
+
+		klog.Infoln("Source streaming completed")
+
+		return nil
 	})
 
 	return errsGroup.Wait()
@@ -197,97 +390,22 @@ func (i *Importer) newDataSource(ctx context.Context) (importer.DataSourceInterf
 	return result, nil
 }
 
-func (i *Importer) streamDataSourceToArchive(ctx context.Context, ds importer.DataSourceInterface, pipeWriter *nio.PipeWriter) error {
-	destFilename, err := ds.Filename()
-	if err != nil {
-		return fmt.Errorf("error getting destination filename: %w", err)
-	}
-
-	srcLength, err := ds.Length()
-	if err != nil {
-		return fmt.Errorf("error getting source length: %w", err)
-	}
-
-	tarWriter := tar.NewWriter(pipeWriter)
-	defer tarWriter.Close()
-
-	fileReader, err := ds.ReadCloser()
-	if err != nil {
-		return fmt.Errorf("error getting file reader: %w", err)
-	}
-	defer fileReader.Close()
-
-	header := &tar.Header{
-		Name:     path.Join("disk", destFilename),
-		Size:     int64(srcLength),
-		Mode:     0644,
-		Typeflag: tar.TypeReg,
-	}
-
-	if err := tarWriter.WriteHeader(header); err != nil {
-		return fmt.Errorf("error writing tar header: %w", err)
-	}
-
-	// Wrap data source reader with progress and speed metrics.
-	instrumentedReader := NewProgressMeterReader(fileReader, uint64(srcLength))
-	instrumentedReader.StartTimedUpdate()
-
-	if i.sha256Sum != "" {
-		hash := sha256.New()
-
-		writer := io.MultiWriter(tarWriter, hash)
-		klog.Infoln("Streaming source")
-		if _, err := io.Copy(writer, instrumentedReader); err != nil {
-			return fmt.Errorf("error copying file contents: %w", err)
-		}
-		klog.Infoln("Source streaming completed")
-
-		sum := hex.EncodeToString(hash.Sum(nil))
-		if sum != i.sha256Sum {
-			return fmt.Errorf("sha256 sum mismatch: %s != %s", sum, i.sha256Sum)
-		}
-	} else if i.md5Sum != "" {
-		hash := md5.New()
-
-		writer := io.MultiWriter(tarWriter, hash)
-		klog.Infoln("Streaming source")
-		if _, err := io.Copy(writer, instrumentedReader); err != nil {
-			return fmt.Errorf("error copying file contents: %w", err)
-		}
-		klog.Infoln("Source streaming completed")
-
-		sum := hex.EncodeToString(hash.Sum(nil))
-		if sum != i.md5Sum {
-			return fmt.Errorf("md5 sum mismatch: %s != %s", sum, i.md5Sum)
-		}
-	} else {
-		klog.Infoln("Streaming source")
-		if _, err := io.Copy(tarWriter, instrumentedReader); err != nil {
-			return fmt.Errorf("error copying file contents: %w", err)
-		}
-		klog.Infoln("Source streaming completed")
-	}
-
-	return nil
-}
-
-func (i *Importer) uploadLayersAndImage(ctx context.Context, pipeReader *nio.PipeReader) error {
+func (i *Importer) uploadLayersAndImage(ctx context.Context, pipeReader *nio.PipeReader, sourceImageSize int, qemuImgInfoCh chan qemuImgInfo) error {
 	nameOpts := i.destNameOptions()
 	remoteOpts := i.destRemoteOptions(ctx)
-	imageName := fmt.Sprintf("%s:latest", i.dest)
 	image := empty.Image
 
-	ref, err := name.ParseReference(imageName, nameOpts...)
+	ref, err := name.ParseReference(i.destImageName, nameOpts...)
 	if err != nil {
 		return fmt.Errorf("error parsing image name: %w", err)
 	}
 
-	repo, err := name.NewRepository(i.dest, nameOpts...)
+	repo, err := name.NewRepository(ref.Context().Name(), nameOpts...)
 	if err != nil {
 		return fmt.Errorf("error constructing new repository: %w", err)
 	}
 
-	layer := stream.NewLayer(pipeReader, stream.WithCompressionLevel(gzip.BestCompression))
+	layer := stream.NewLayer(pipeReader)
 
 	klog.Infoln("Uploading layer to registry")
 	if err := remote.WriteLayer(repo, layer, remoteOpts...); err != nil {
@@ -295,12 +413,29 @@ func (i *Importer) uploadLayersAndImage(ctx context.Context, pipeReader *nio.Pip
 	}
 	klog.Infoln("Layer uploaded")
 
+	info := <-qemuImgInfoCh
+
+	cnf, err := image.ConfigFile()
+	if err != nil {
+		return fmt.Errorf("error getting image config: %w", err)
+	}
+
+	cnf.Config.Labels = map[string]string{}
+	cnf.Config.Labels[imageLabelSourceImageVirtualSize] = fmt.Sprintf("%d", info.VirtualSize)
+	cnf.Config.Labels[imageLabelSourceImageSize] = fmt.Sprintf("%d", sourceImageSize)
+	cnf.Config.Labels[imageLabelSourceImageFormat] = info.Format
+
+	image, err = mutate.ConfigFile(image, cnf)
+	if err != nil {
+		return fmt.Errorf("error mutating image config: %w", err)
+	}
+
 	image, err = mutate.AppendLayers(image, layer)
 	if err != nil {
 		return fmt.Errorf("error appending layer to image: %w", err)
 	}
 
-	klog.Infof("Uploading image %q to registry", imageName)
+	klog.Infof("Uploading image %q to registry", i.destImageName)
 	if err := remote.Write(ref, image, remoteOpts...); err != nil {
 		return fmt.Errorf("error uploading image: %w", err)
 	}
