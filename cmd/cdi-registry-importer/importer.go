@@ -228,12 +228,16 @@ func (i *Importer) streamDataSourceToArchive(ctx context.Context, ds importer.Da
 		return fmt.Errorf("error writing tar header: %w", err)
 	}
 
+	// Wrap data source reader with progress and speed metrics.
+	instrumentedReader := NewProgressMeterReader(fileReader, uint64(srcLength))
+	instrumentedReader.StartTimedUpdate()
+
 	if i.sha256Sum != "" {
 		hash := sha256.New()
 
 		writer := io.MultiWriter(tarWriter, hash)
 		klog.Infoln("Streaming source")
-		if _, err := io.Copy(writer, fileReader); err != nil {
+		if _, err := io.Copy(writer, instrumentedReader); err != nil {
 			return fmt.Errorf("error copying file contents: %w", err)
 		}
 		klog.Infoln("Source streaming completed")
@@ -247,7 +251,7 @@ func (i *Importer) streamDataSourceToArchive(ctx context.Context, ds importer.Da
 
 		writer := io.MultiWriter(tarWriter, hash)
 		klog.Infoln("Streaming source")
-		if _, err := io.Copy(writer, fileReader); err != nil {
+		if _, err := io.Copy(writer, instrumentedReader); err != nil {
 			return fmt.Errorf("error copying file contents: %w", err)
 		}
 		klog.Infoln("Source streaming completed")
@@ -258,7 +262,7 @@ func (i *Importer) streamDataSourceToArchive(ctx context.Context, ds importer.Da
 		}
 	} else {
 		klog.Infoln("Streaming source")
-		if _, err := io.Copy(tarWriter, fileReader); err != nil {
+		if _, err := io.Copy(tarWriter, instrumentedReader); err != nil {
 			return fmt.Errorf("error copying file contents: %w", err)
 		}
 		klog.Infoln("Source streaming completed")
