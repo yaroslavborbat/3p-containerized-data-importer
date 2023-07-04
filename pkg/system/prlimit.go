@@ -23,7 +23,6 @@ import (
 	"os/exec"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"
@@ -181,12 +180,4 @@ func executeWithLimits(limits *ProcessLimitValues, callback func(string), logErr
 		return errBuf.Bytes(), errors.Wrapf(err, "%s execution failed", command)
 	}
 	return output, nil
-}
-
-func prlimit(pid int, limit int, value *syscall.Rlimit) error {
-	_, _, e1 := syscall.RawSyscall6(syscall.SYS_PRLIMIT64, uintptr(pid), uintptr(limit), uintptr(unsafe.Pointer(value)), 0, 0, 0)
-	if e1 != 0 {
-		return errors.Wrapf(e1, "error setting prlimit on %d with value %d on pid %d", limit, value, pid)
-	}
-	return nil
 }

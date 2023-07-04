@@ -5,6 +5,7 @@ package importer
 
 import (
 	"errors"
+	"io"
 	"net/url"
 
 	v1 "k8s.io/api/core/v1"
