@@ -47,6 +47,13 @@ type VddkInfo struct {
 	Host    string
 }
 
+// RegistryImporterInfo holds complete import report returned by a registry importer pod
+type RegistryImporterInfo struct {
+	SourceImageSize        int    `json:"source-image-size"`
+	SourceImageVirtualSize int    `json:"source-image-virtual-size"`
+	SourceImageFormat      string `json:"source-image-format"`
+}
+
 // RandAlphaNum provides an implementation to generate a random alpha numeric string of the specified length
 func RandAlphaNum(n int) string {
 	rand.Seed(time.Now().UnixNano())

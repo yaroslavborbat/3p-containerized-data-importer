@@ -63,7 +63,7 @@ type Importer struct {
 }
 
 type qemuImgInfo struct {
-	VirtualSize    int64  `json:"virtual-size"`
+	VirtualSize    int    `json:"virtual-size"`
 	Filename       string `json:"filename"`
 	ClusterSize    int    `json:"cluster-size"`
 	Format         string `json:"format"`
@@ -200,6 +200,10 @@ func (i *Importer) runForDataSource(ctx context.Context) error {
 		sourceImageSize, err = ds.Length()
 		if err != nil {
 			return fmt.Errorf("error getting source image size: %w", err)
+		}
+
+		if sourceImageSize == 0 {
+			return fmt.Errorf("zero data source image size")
 		}
 
 		sourceImageReader, err = ds.ReadCloser()
@@ -373,7 +377,7 @@ func (i *Importer) inspectAndStreamSourceImage(ctx context.Context, sourceImageF
 	return errsGroup.Wait()
 }
 
-func (i *Importer) newDataSource(ctx context.Context) (importer.DataSourceInterface, error) {
+func (i *Importer) newDataSource(_ context.Context) (importer.DataSourceInterface, error) {
 	var result importer.DataSourceInterface
 
 	switch i.srcType {
@@ -413,7 +417,7 @@ func (i *Importer) uploadLayersAndImage(ctx context.Context, pipeReader *nio.Pip
 	}
 	klog.Infoln("Layer uploaded")
 
-	info := <-qemuImgInfoCh
+	imageInfo := <-qemuImgInfoCh
 
 	cnf, err := image.ConfigFile()
 	if err != nil {
@@ -421,9 +425,9 @@ func (i *Importer) uploadLayersAndImage(ctx context.Context, pipeReader *nio.Pip
 	}
 
 	cnf.Config.Labels = map[string]string{}
-	cnf.Config.Labels[imageLabelSourceImageVirtualSize] = fmt.Sprintf("%d", info.VirtualSize)
+	cnf.Config.Labels[imageLabelSourceImageVirtualSize] = fmt.Sprintf("%d", imageInfo.VirtualSize)
 	cnf.Config.Labels[imageLabelSourceImageSize] = fmt.Sprintf("%d", sourceImageSize)
-	cnf.Config.Labels[imageLabelSourceImageFormat] = info.Format
+	cnf.Config.Labels[imageLabelSourceImageFormat] = imageInfo.Format
 
 	image, err = mutate.ConfigFile(image, cnf)
 	if err != nil {
@@ -439,7 +443,32 @@ func (i *Importer) uploadLayersAndImage(ctx context.Context, pipeReader *nio.Pip
 	if err := remote.Write(ref, image, remoteOpts...); err != nil {
 		return fmt.Errorf("error uploading image: %w", err)
 	}
-	klog.Infoln("Image uploaded")
+
+	if err := writeImportCompleteMessage(sourceImageSize, imageInfo.VirtualSize, imageInfo.Format); err != nil {
+		return fmt.Errorf("error writing import complete message: %w", err)
+	}
+
+	return nil
+}
+
+func writeImportCompleteMessage(sourceImageSize, sourceImageVirtualSize int, sourceImageFormat string) error {
+	rawMsg, err := json.Marshal(util.RegistryImporterInfo{
+		SourceImageSize:        sourceImageSize,
+		SourceImageVirtualSize: sourceImageVirtualSize,
+		SourceImageFormat:      sourceImageFormat,
+	})
+	if err != nil {
+		return err
+	}
+
+	message := string(rawMsg)
+
+	err = util.WriteTerminationMessage(message)
+	if err != nil {
+		return err
+	}
+
+	klog.Infoln("Image uploaded: " + message)
 
 	return nil
 }
