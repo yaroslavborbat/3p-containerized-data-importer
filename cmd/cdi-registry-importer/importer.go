@@ -9,13 +9,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"os"
-	"os/exec"
-	"path"
-	"strconv"
-
 	"github.com/djherbis/buffer"
 	"github.com/djherbis/nio/v3"
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -25,6 +18,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/stream"
 	"golang.org/x/sync/errgroup"
+	"io"
 	"k8s.io/klog/v2"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 	"kubevirt.io/containerized-data-importer/pkg/common"
@@ -32,6 +26,11 @@ import (
 	"kubevirt.io/containerized-data-importer/pkg/importer"
 	"kubevirt.io/containerized-data-importer/pkg/util"
 	prometheusutil "kubevirt.io/containerized-data-importer/pkg/util/prometheus"
+	"net/http"
+	"os"
+	"os/exec"
+	"path"
+	"strconv"
 )
 
 // FIXME(ilya-lesikov): certdir
@@ -78,6 +77,12 @@ type qemuImgInfo struct {
 	} `json:"format-specific"`
 	DirtyFlag bool `json:"dirty-flag"`
 }
+
+const (
+	imageInfoSize        = 64 * 1024 * 1024
+	pipeBufSize          = 64 * 1024 * 1024
+	tempImageInfoPattern = "tempfile"
+)
 
 func (i *Importer) Run(ctx context.Context) error {
 	promCertsDir, err := os.MkdirTemp("", "certsdir")
@@ -216,7 +221,7 @@ func (i *Importer) runForDataSource(ctx context.Context) error {
 	progressMeterReader := NewProgressMeterReader(sourceImageReader, uint64(sourceImageSize))
 	progressMeterReader.StartTimedUpdate()
 
-	pipeReader, pipeWriter := nio.Pipe(buffer.New(64 * 1024 * 1024))
+	pipeReader, pipeWriter := nio.Pipe(buffer.New(pipeBufSize))
 	qemuImgInfoCh := make(chan qemuImgInfo)
 	errsGroup, ctx := errgroup.WithContext(ctx)
 	errsGroup.Go(func() error {
@@ -283,93 +288,57 @@ func (i *Importer) inspectAndStreamSourceImage(ctx context.Context, sourceImageF
 		streamWriter = io.MultiWriter(writers...)
 	}
 
-	const size64MB = 64 * 1024 * 1024
-	doneCh := make(chan int64)
 	errsGroup, ctx := errgroup.WithContext(ctx)
 
-	// Read 64MB from source to temp file and run qemu-img info.
+	branchedSourceBuf := buffer.New(imageInfoSize)
+	branchedSourceReader, branchedSourceWriter := nio.Pipe(branchedSourceBuf)
+
+	defer sourceImageReader.Close()
+
 	errsGroup.Go(func() error {
-		// Create temp file.
-		var tempFile *os.File
-		var err error
-		{
-			klog.Infoln("Creating temp file")
-			tempFile, err = os.CreateTemp("", "tempfile")
-			if err != nil {
-				return fmt.Errorf("error creating temp file: %w", err)
-			}
-			defer os.Remove(tempFile.Name())
-		}
-
-		// Read 64MB from source.
-		{
-			klog.Infoln("Reading 64MB from source")
-			size, err := io.CopyN(io.MultiWriter(streamWriter, tempFile), sourceImageReader, size64MB)
-			if err != nil && err != io.EOF {
-				return fmt.Errorf("error reading data from source: %w", err)
-			}
-
-			if err := tempFile.Close(); err != nil {
-				return fmt.Errorf("error closing temp file: %w", err)
-			}
-
-			doneCh <- size
-		}
-
-		// Inspect image.
-		{
-			klog.Infoln("Running qemu-img info on temp file")
-			var out []byte
-			{
-				cmd := exec.CommandContext(ctx, "qemu-img", "info", "--output=json", tempFile.Name())
-				out, err = cmd.Output()
-				if err != nil {
-					return fmt.Errorf("error running qemu-img info: %w", err)
-				}
-			}
-
-			klog.Infoln("Parsing qemu-img info output:", string(out))
-			var info qemuImgInfo
-			if err = json.Unmarshal(out, &info); err != nil {
-				return fmt.Errorf("error parsing qemu-img info output: %w", err)
-			}
-
-			klog.Infoln("Sending qemu-img info")
-			qemuImgInfoCh <- info
-		}
-
-		return nil
-	})
-
-	// Stream the rest of the source image.
-	errsGroup.Go(func() error {
-		defer sourceImageReader.Close()
 		defer tarWriter.Close()
 		defer pipeWriter.Close()
+		defer branchedSourceWriter.Close()
 
-		doneSize := <-doneCh
+		klog.Infoln("Streaming first 64MB from source (with image info)")
+		doneSize, err := io.CopyN(streamWriter, io.TeeReader(sourceImageReader, branchedSourceWriter), imageInfoSize)
+		if err != nil {
+			return fmt.Errorf("error copying file contents: %w", err)
+		}
 
-		klog.Infoln("Streaming the rest of the source image")
-		{
-			n, err := io.Copy(streamWriter, sourceImageReader)
-			if err != nil && err != io.EOF {
-				return fmt.Errorf("error copying file contents: %w", err)
-			}
+		klog.Infoln("Streaming the rest of the source")
+		n, err := io.Copy(streamWriter, sourceImageReader)
+		if err != nil {
+			return fmt.Errorf("error copying file contents: %w", err)
+		}
 
-			doneSize += n
+		doneSize += n
 
-			if doneSize != int64(sourceImageSize) {
-				return fmt.Errorf("source image size mismatch: %d != %d", doneSize, sourceImageSize)
-			}
+		if doneSize != int64(sourceImageSize) {
+			return fmt.Errorf("source image size mismatch: %d != %d", doneSize, sourceImageSize)
+		}
 
-			for _, checksumCheckFunc := range checksumCheckFuncList {
-				if err := checksumCheckFunc(); err != nil {
-					return err
-				}
+		for _, checksumCheckFunc := range checksumCheckFuncList {
+			if err = checksumCheckFunc(); err != nil {
+				return err
 			}
 		}
 
 		klog.Infoln("Source streaming completed")
+
+		return nil
+	})
+
+	errsGroup.Go(func() error {
+		defer branchedSourceBuf.Reset()
+		defer branchedSourceReader.Close()
+
+		info, err := getImageInfo(ctx, branchedSourceReader)
+		if err != nil {
+			return err
+		}
+
+		qemuImgInfoCh <- info
 
 		return nil
 	})
@@ -449,6 +418,48 @@ func (i *Importer) uploadLayersAndImage(ctx context.Context, pipeReader *nio.Pip
 	}
 
 	return nil
+}
+
+func getImageInfo(ctx context.Context, sourceReader io.ReadCloser) (qemuImgInfo, error) {
+	formatSourceReaders, err := importer.NewFormatReaders(sourceReader, 0)
+	if err != nil {
+		klog.Errorf("Error creating readers: %v", err)
+		return qemuImgInfo{}, err
+	}
+
+	klog.Infoln("Creating temp image info file")
+	tempImageInfoFile, err := os.CreateTemp("", tempImageInfoPattern)
+	if err != nil {
+		return qemuImgInfo{}, fmt.Errorf("error creating temp file: %w", err)
+	}
+
+	defer os.Remove(tempImageInfoFile.Name())
+
+	klog.Infoln("Write to temp image info file")
+	_, err = io.CopyN(tempImageInfoFile, formatSourceReaders.TopReader(), imageInfoSize)
+	if err != nil {
+		return qemuImgInfo{}, fmt.Errorf("error writing to temp file: %w", err)
+	}
+
+	if err = tempImageInfoFile.Close(); err != nil {
+		return qemuImgInfo{}, fmt.Errorf("error closing temp file: %w", err)
+	}
+
+	// Inspect image.
+	klog.Infoln("Running qemu-img info on temp file")
+	cmd := exec.CommandContext(ctx, "qemu-img", "info", "--output=json", tempImageInfoFile.Name())
+	out, err := cmd.Output()
+	if err != nil {
+		return qemuImgInfo{}, fmt.Errorf("error running qemu-img info: %w", err)
+	}
+
+	klog.Infoln("Parsing qemu-img info output:", out)
+	var info qemuImgInfo
+	if err = json.Unmarshal(out, &info); err != nil {
+		return qemuImgInfo{}, fmt.Errorf("error parsing qemu-img info output: %w", err)
+	}
+
+	return info, nil
 }
 
 func writeImportCompleteMessage(sourceImageSize, sourceImageVirtualSize int, sourceImageFormat string) error {
