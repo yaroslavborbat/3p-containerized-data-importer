@@ -376,8 +376,8 @@ func (i *Importer) uploadLayersAndImage(ctx context.Context, pipeReader *nio.Pip
 	klog.Infof("Got image info: %+v", imageInfo)
 
 	cnf.Config.Labels = map[string]string{}
-	cnf.Config.Labels[imageLabelSourceImageSize] = fmt.Sprintf("%d", sourceImageSize)
 	cnf.Config.Labels[imageLabelSourceImageVirtualSize] = fmt.Sprintf("%d", imageInfo.VirtualSize)
+	cnf.Config.Labels[imageLabelSourceImageSize] = fmt.Sprintf("%d", sourceImageSize)
 	cnf.Config.Labels[imageLabelSourceImageFormat] = imageInfo.Format
 
 	image, err = mutate.ConfigFile(image, cnf)
@@ -444,6 +444,7 @@ func getImageInfo(ctx context.Context, sourceReader io.ReadCloser) (ImageInfo, e
 		}
 
 		if imageInfo.Format != "raw" {
+			// It's necessary to read everything from the original image to avoid blocking.
 			_, err = io.Copy(&util.EmptyWriter{}, sourceReader)
 			if err != nil {
 				return ImageInfo{}, fmt.Errorf("error copying to nowhere: %w", err)
@@ -453,6 +454,8 @@ func getImageInfo(ctx context.Context, sourceReader io.ReadCloser) (ImageInfo, e
 		}
 	}
 
+	// `qemu-img` command does not support getting information about iso files.
+	// It is necessary to obtain this information in another way (using the `file` command).
 	klog.Infoln("Check the image as it may be an iso")
 	{
 		cmd := exec.CommandContext(ctx, "file", "-b", tempImageInfoFile.Name())
@@ -469,6 +472,7 @@ func getImageInfo(ctx context.Context, sourceReader io.ReadCloser) (ImageInfo, e
 			imageInfo.Format = isoImageType
 		}
 
+		// Count uncompressed size of source image.
 		n, err := io.Copy(&util.EmptyWriter{}, formatSourceReaders.TopReader())
 		if err != nil {
 			return ImageInfo{}, fmt.Errorf("error copying to nowhere: %w", err)
