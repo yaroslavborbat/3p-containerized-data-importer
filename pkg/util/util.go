@@ -105,6 +105,12 @@ func (r *CountingReader) Close() error {
 	return r.Reader.Close()
 }
 
+type EmptyWriter struct{}
+
+func (w EmptyWriter) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
 // GetAvailableSpaceByVolumeMode calls another method based on the volumeMode parameter to get the amount of
 // available space at the path specified.
 func GetAvailableSpaceByVolumeMode(volumeMode v1.PersistentVolumeMode) (int64, error) {
