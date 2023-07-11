@@ -31,6 +31,7 @@ import (
 	"os/exec"
 	"path"
 	"strconv"
+	"strings"
 )
 
 // FIXME(ilya-lesikov): certdir
@@ -61,21 +62,9 @@ type Importer struct {
 	md5Sum         string
 }
 
-type qemuImgInfo struct {
-	VirtualSize    int    `json:"virtual-size"`
-	Filename       string `json:"filename"`
-	ClusterSize    int    `json:"cluster-size"`
-	Format         string `json:"format"`
-	ActualSize     int    `json:"actual-size"`
-	FormatSpecific struct {
-		Type string `json:"type"`
-		Data struct {
-			Compat          string `json:"compat"`
-			CompressionType string `json:"compression-type"`
-			RefcountBits    int    `json:"refcount-bits"`
-		} `json:"data"`
-	} `json:"format-specific"`
-	DirtyFlag bool `json:"dirty-flag"`
+type ImageInfo struct {
+	VirtualSize int    `json:"virtual-size"`
+	Format      string `json:"format"`
 }
 
 const (
@@ -222,20 +211,20 @@ func (i *Importer) runForDataSource(ctx context.Context) error {
 	progressMeterReader.StartTimedUpdate()
 
 	pipeReader, pipeWriter := nio.Pipe(buffer.New(pipeBufSize))
-	qemuImgInfoCh := make(chan qemuImgInfo)
+	imageInfoCh := make(chan ImageInfo)
 	errsGroup, ctx := errgroup.WithContext(ctx)
 	errsGroup.Go(func() error {
-		return i.inspectAndStreamSourceImage(ctx, sourceImageFilename, sourceImageSize, progressMeterReader, pipeWriter, qemuImgInfoCh)
+		return i.inspectAndStreamSourceImage(ctx, sourceImageFilename, sourceImageSize, progressMeterReader, pipeWriter, imageInfoCh)
 	})
 	errsGroup.Go(func() error {
 		defer pipeReader.Close()
-		return i.uploadLayersAndImage(ctx, pipeReader, sourceImageSize, qemuImgInfoCh)
+		return i.uploadLayersAndImage(ctx, pipeReader, sourceImageSize, imageInfoCh)
 	})
 
 	return errsGroup.Wait()
 }
 
-func (i *Importer) inspectAndStreamSourceImage(ctx context.Context, sourceImageFilename string, sourceImageSize int, sourceImageReader io.ReadCloser, pipeWriter *nio.PipeWriter, qemuImgInfoCh chan qemuImgInfo) error {
+func (i *Importer) inspectAndStreamSourceImage(ctx context.Context, sourceImageFilename string, sourceImageSize int, sourceImageReader io.ReadCloser, pipeWriter *nio.PipeWriter, imageInfoCh chan ImageInfo) error {
 	var tarWriter *tar.Writer
 	{
 		tarWriter = tar.NewWriter(pipeWriter)
@@ -290,29 +279,20 @@ func (i *Importer) inspectAndStreamSourceImage(ctx context.Context, sourceImageF
 
 	errsGroup, ctx := errgroup.WithContext(ctx)
 
-	branchedSourceBuf := buffer.New(imageInfoSize)
-	branchedSourceReader, branchedSourceWriter := nio.Pipe(branchedSourceBuf)
-
-	defer sourceImageReader.Close()
+	imageInfoSourceReader, imageInfoSourceWriter := nio.Pipe(buffer.New(imageInfoSize))
+	sourceReader := io.TeeReader(sourceImageReader, imageInfoSourceWriter)
 
 	errsGroup.Go(func() error {
 		defer tarWriter.Close()
 		defer pipeWriter.Close()
-		defer branchedSourceWriter.Close()
+		defer sourceImageReader.Close()
+		defer imageInfoSourceWriter.Close()
 
-		klog.Infoln("Streaming first 64MB from source (with image info)")
-		doneSize, err := io.CopyN(streamWriter, io.TeeReader(sourceImageReader, branchedSourceWriter), imageInfoSize)
+		klog.Infoln("Streaming from the source")
+		doneSize, err := io.Copy(streamWriter, sourceReader)
 		if err != nil {
 			return fmt.Errorf("error copying file contents: %w", err)
 		}
-
-		klog.Infoln("Streaming the rest of the source")
-		n, err := io.Copy(streamWriter, sourceImageReader)
-		if err != nil {
-			return fmt.Errorf("error copying file contents: %w", err)
-		}
-
-		doneSize += n
 
 		if doneSize != int64(sourceImageSize) {
 			return fmt.Errorf("source image size mismatch: %d != %d", doneSize, sourceImageSize)
@@ -330,15 +310,14 @@ func (i *Importer) inspectAndStreamSourceImage(ctx context.Context, sourceImageF
 	})
 
 	errsGroup.Go(func() error {
-		defer branchedSourceBuf.Reset()
-		defer branchedSourceReader.Close()
+		defer imageInfoSourceReader.Close()
 
-		info, err := getImageInfo(ctx, branchedSourceReader)
+		info, err := getImageInfo(ctx, imageInfoSourceReader)
 		if err != nil {
 			return err
 		}
 
-		qemuImgInfoCh <- info
+		imageInfoCh <- info
 
 		return nil
 	})
@@ -363,7 +342,7 @@ func (i *Importer) newDataSource(_ context.Context) (importer.DataSourceInterfac
 	return result, nil
 }
 
-func (i *Importer) uploadLayersAndImage(ctx context.Context, pipeReader *nio.PipeReader, sourceImageSize int, qemuImgInfoCh chan qemuImgInfo) error {
+func (i *Importer) uploadLayersAndImage(ctx context.Context, pipeReader *nio.PipeReader, sourceImageSize int, ImageInfoCh chan ImageInfo) error {
 	nameOpts := i.destNameOptions()
 	remoteOpts := i.destRemoteOptions(ctx)
 	image := empty.Image
@@ -386,7 +365,7 @@ func (i *Importer) uploadLayersAndImage(ctx context.Context, pipeReader *nio.Pip
 	}
 	klog.Infoln("Layer uploaded")
 
-	imageInfo := <-qemuImgInfoCh
+	imageInfo := <-ImageInfoCh
 
 	cnf, err := image.ConfigFile()
 	if err != nil {
@@ -420,46 +399,79 @@ func (i *Importer) uploadLayersAndImage(ctx context.Context, pipeReader *nio.Pip
 	return nil
 }
 
-func getImageInfo(ctx context.Context, sourceReader io.ReadCloser) (qemuImgInfo, error) {
+func getImageInfo(ctx context.Context, sourceReader io.ReadCloser) (ImageInfo, error) {
 	formatSourceReaders, err := importer.NewFormatReaders(sourceReader, 0)
 	if err != nil {
 		klog.Errorf("Error creating readers: %v", err)
-		return qemuImgInfo{}, err
+		return ImageInfo{}, err
 	}
 
 	klog.Infoln("Creating temp image info file")
 	tempImageInfoFile, err := os.CreateTemp("", tempImageInfoPattern)
 	if err != nil {
-		return qemuImgInfo{}, fmt.Errorf("error creating temp file: %w", err)
+		return ImageInfo{}, fmt.Errorf("error creating temp file: %w", err)
 	}
 
-	defer os.Remove(tempImageInfoFile.Name())
-
 	klog.Infoln("Write to temp image info file")
-	_, err = io.CopyN(tempImageInfoFile, formatSourceReaders.TopReader(), imageInfoSize)
+	uncompressedN, err := io.CopyN(tempImageInfoFile, formatSourceReaders.TopReader(), imageInfoSize)
 	if err != nil {
-		return qemuImgInfo{}, fmt.Errorf("error writing to temp file: %w", err)
+		return ImageInfo{}, fmt.Errorf("error writing to temp file: %w", err)
 	}
 
 	if err = tempImageInfoFile.Close(); err != nil {
-		return qemuImgInfo{}, fmt.Errorf("error closing temp file: %w", err)
+		return ImageInfo{}, fmt.Errorf("error closing temp file: %w", err)
 	}
 
-	// Inspect image.
-	klog.Infoln("Running qemu-img info on temp file")
 	cmd := exec.CommandContext(ctx, "qemu-img", "info", "--output=json", tempImageInfoFile.Name())
-	out, err := cmd.Output()
+	outRaw, err := cmd.Output()
 	if err != nil {
-		return qemuImgInfo{}, fmt.Errorf("error running qemu-img info: %w", err)
+		return ImageInfo{}, fmt.Errorf("error running qemu-img info: %w", err)
 	}
 
-	klog.Infoln("Parsing qemu-img info output:", out)
-	var info qemuImgInfo
-	if err = json.Unmarshal(out, &info); err != nil {
-		return qemuImgInfo{}, fmt.Errorf("error parsing qemu-img info output: %w", err)
+	var imageInfo ImageInfo
+	if err = json.Unmarshal(outRaw, &imageInfo); err != nil {
+		return ImageInfo{}, fmt.Errorf("error parsing qemu-img info output: %w", err)
 	}
 
-	return info, nil
+	if imageInfo.Format != "raw" {
+		_, err = io.Copy(&EmptyWriter{}, formatSourceReaders.TopReader())
+		if err != nil {
+			return ImageInfo{}, fmt.Errorf("error writing to temp file: %w", err)
+		}
+
+		return imageInfo, nil
+	}
+
+	cmd = exec.CommandContext(ctx, "file", "-b", tempImageInfoFile.Name())
+	outRaw, err = cmd.Output()
+	if err != nil {
+		return ImageInfo{}, fmt.Errorf("error running qemu-img info: %w", err)
+	}
+
+	out := string(outRaw)
+
+	klog.Infoln("Parsing with file command output:", out)
+
+	if strings.HasPrefix(out, "ISO") {
+		imageInfo.Format = "iso"
+	}
+
+	n, err := io.Copy(&EmptyWriter{}, formatSourceReaders.TopReader())
+	if err != nil {
+		return ImageInfo{}, fmt.Errorf("error writing to temp file: %w", err)
+	}
+
+	uncompressedN += n
+
+	imageInfo.VirtualSize = int(uncompressedN)
+
+	return imageInfo, nil
+}
+
+type EmptyWriter struct{}
+
+func (w EmptyWriter) Write(p []byte) (int, error) {
+	return len(p), nil
 }
 
 func writeImportCompleteMessage(sourceImageSize, sourceImageVirtualSize int, sourceImageFormat string) error {
