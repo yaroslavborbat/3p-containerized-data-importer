@@ -487,16 +487,7 @@ func getExtraHeadersFromSecrets() ([]string, error) {
 }
 
 func (hs *HTTPDataSource) ReadCloser() (io.ReadCloser, error) {
-	if hs.readers == nil {
-		var err error
-		hs.readers, err = NewFormatReaders(hs.httpReader, hs.contentLength)
-		if err != nil {
-			klog.Errorf("Error creating readers: %v", err)
-			return nil, err
-		}
-	}
-
-	return hs.readers.TopReader(), nil
+	return hs.httpReader, nil
 }
 
 func (hs *HTTPDataSource) Length() (int, error) {
