@@ -2,7 +2,7 @@ version: "3"
 silent: true
 
 env:
-  REGISTRY_IMPORTER_IMAGE: ghcr.io/werf/cdi-registry-importer:latest
+  REGISTRY_IMPORTER_IMAGE: k3d-registry.virtualization-controller.test:5000/cdi-registry-importer:latest
 
 tasks:
   cdi-registry-importer:build:
@@ -13,5 +13,5 @@ tasks:
   cdi-registry-importer:push:
     desc: "build and push"
     cmds:
-      - task: build
-      - docker push ghcr.io/werf/cdi-registry-importer:latest
+      - task: cdi-registry-importer:build
+      - docker push ${REGISTRY_IMPORTER_IMAGE}
