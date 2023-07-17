@@ -26,8 +26,7 @@ func main() {
 
 	importer := NewImporter()
 	if err := importer.Run(ctx); err != nil {
-		klog.Errorf("Error running registry importer: %+v", err)
-		os.Exit(1)
+		klog.Fatalf("Error running registry importer: %+v", err)
 	}
 
 	klog.Infoln("Finished running registry importer")

@@ -9,6 +9,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path"
+	"strconv"
+	"strings"
+
 	"github.com/djherbis/buffer"
 	"github.com/djherbis/nio/v3"
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -19,7 +27,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/stream"
 	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
-	"io"
 	"k8s.io/klog/v2"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 	"kubevirt.io/containerized-data-importer/pkg/common"
@@ -27,12 +34,6 @@ import (
 	"kubevirt.io/containerized-data-importer/pkg/importer"
 	"kubevirt.io/containerized-data-importer/pkg/util"
 	prometheusutil "kubevirt.io/containerized-data-importer/pkg/util/prometheus"
-	"net/http"
-	"os"
-	"os/exec"
-	"path"
-	"strconv"
-	"strings"
 )
 
 // FIXME(ilya-lesikov): certdir
@@ -89,9 +90,9 @@ func (i *Importer) Run(ctx context.Context) error {
 
 	if i.srcType == cc.SourceRegistry {
 		return i.runForRegistry(ctx)
-	} else {
-		return i.runForDataSource(ctx)
 	}
+
+	return i.runForDataSource(ctx)
 }
 
 func (i *Importer) parseOptions() error {
@@ -233,7 +234,7 @@ func (i *Importer) inspectAndStreamSourceImage(ctx context.Context, sourceImageF
 		header := &tar.Header{
 			Name:     path.Join("disk", sourceImageFilename),
 			Size:     int64(sourceImageSize),
-			Mode:     0644,
+			Mode:     0o644,
 			Typeflag: tar.TypeReg,
 		}
 
@@ -531,7 +532,7 @@ func (i *Importer) srcRemoteOptions(ctx context.Context) []remote.Option {
 		InsecureSkipVerify: i.srcInsecure,
 	}
 
-	transport := &(*http.DefaultTransport.(*http.Transport))
+	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = tlsConfig
 
 	remoteOpts := []remote.Option{
@@ -548,7 +549,7 @@ func (i *Importer) destRemoteOptions(ctx context.Context) []remote.Option {
 		InsecureSkipVerify: i.destInsecure,
 	}
 
-	transport := &(*http.DefaultTransport.(*http.Transport))
+	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = tlsConfig
 
 	remoteOpts := []remote.Option{

@@ -43,14 +43,15 @@ func credsFromRegistryAuthFile(configFile *configfile.ConfigFile, ref string) (s
 	}
 
 	var username, password string
-	if authConfig.IdentityToken != "" {
+	switch {
+	case authConfig.IdentityToken != "":
 		return "", "", fmt.Errorf("identity token not supported")
-	} else if authConfig.Auth != "" {
+	case authConfig.Auth != "":
 		username, password, err = decodeAuth(authConfig.Auth)
 		if err != nil {
 			return "", "", fmt.Errorf("error decoding auth config: %w", err)
 		}
-	} else {
+	default:
 		username = authConfig.Username
 		password = authConfig.Password
 	}

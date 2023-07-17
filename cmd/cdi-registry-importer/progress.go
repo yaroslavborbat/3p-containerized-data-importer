@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -43,24 +44,27 @@ type ProgressMeterReader struct {
 	speed    *prometheus.GaugeVec
 	total    uint64
 	ownerUID string
-	final    bool
 }
 
 func init() {
 	if err := prometheus.Register(registryProgress); err != nil {
-		if are, ok := err.(prometheus.AlreadyRegisteredError); ok {
+		var alreadyRegisteredErr prometheus.AlreadyRegisteredError
+
+		if errors.As(err, &alreadyRegisteredErr) {
 			// A counter for that metric has been registered before.
 			// Use the old counter from now on.
-			registryProgress = are.ExistingCollector.(*prometheus.CounterVec)
+			registryProgress = alreadyRegisteredErr.ExistingCollector.(*prometheus.CounterVec)
 		} else {
 			klog.Errorf("Unable to create prometheus progress counter")
 		}
 	}
 	if err := prometheus.Register(registrySpeed); err != nil {
-		if are, ok := err.(prometheus.AlreadyRegisteredError); ok {
+		var alreadyRegisteredErr prometheus.AlreadyRegisteredError
+
+		if errors.As(err, &alreadyRegisteredErr) {
 			// A counter for that metric has been registered before.
 			// Use the old gauge from now on.
-			registrySpeed = are.ExistingCollector.(*prometheus.GaugeVec)
+			registrySpeed = alreadyRegisteredErr.ExistingCollector.(*prometheus.GaugeVec)
 		} else {
 			klog.Errorf("Unable to create prometheus progress speed gauge")
 		}
@@ -97,7 +101,7 @@ func (p *ProgressMeterReader) timedUpdateSpeed() {
 func (p *ProgressMeterReader) updateSpeed(start time.Time) bool {
 	if p.total > 0 {
 		finished := p.Done
-		passedTime := float64(time.Now().Sub(start).Nanoseconds()) / 1e9
+		passedTime := float64(time.Since(start).Nanoseconds()) / 1e9
 		transmittedBytes := float64(p.total)
 		if !finished && p.Current < p.total {
 			transmittedBytes = float64(p.Current)

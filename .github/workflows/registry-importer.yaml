@@ -1,0 +1,56 @@
+name: Registry Importer
+
+run-name: ${{ github.actor }} is pushing new version of Registry Importer to dev-registry.deckhouse.io 🚀
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go 1.20
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.20"
+
+      - name: Download Go modules
+        run: |
+          go mod download
+
+      - name: Install Task
+        uses: arduino/setup-task@v1
+
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b . v1.52.2
+          mv golangci-lint /usr/local/bin/golangci-lint
+
+      - name: Run golangci-lint
+        run: |
+          task lint
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: dev-registry.deckhouse.io
+          username: ${{ secrets.DECKHOUSE_DEV_REGISTRY_USER }}
+          password: ${{ secrets.DECKHOUSE_DEV_REGISTRY_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: cdi-registry-importer.Dockerfile
+          tags: dev-registry.deckhouse.io/virt/virtualization-importer:latest
+          push: true

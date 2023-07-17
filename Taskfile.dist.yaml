@@ -2,16 +2,48 @@ version: "3"
 silent: true
 
 env:
-  REGISTRY_IMPORTER_IMAGE: k3d-registry.virtualization-controller.test:5000/cdi-registry-importer:latest
+  K3D_REGISTRY_IMPORTER_IMAGE: k3d-registry.virtualization-controller.test:5000/cdi-registry-importer:latest
+  DECKHOUSE_REGISTRY_IMPORTER_IMAGE: dev-registry.deckhouse.io/virt/virtualization-importer:latest
 
 tasks:
-  cdi-registry-importer:build:
-    desc: "build"
+  build:
+    desc: "build importer image"
     cmds:
-      - docker build -t ${REGISTRY_IMPORTER_IMAGE} -f cdi-registry-importer.Dockerfile .
+      - docker build -t cdi-registry-importer:latest -f cdi-registry-importer.Dockerfile .
 
-  cdi-registry-importer:push:
-    desc: "build and push"
+  k3d-registry:push:
+    desc: "build importer image and push to local k3d registry"
     cmds:
-      - task: cdi-registry-importer:build
-      - docker push ${REGISTRY_IMPORTER_IMAGE}
+      - task: build
+      - docker tag cdi-registry-importer:latest ${K3D_REGISTRY_IMPORTER_IMAGE}
+      - docker push ${K3D_REGISTRY_IMPORTER_IMAGE}
+
+  d8-registry:push:
+    desc: "build importer image and push to dev deckhouse registry"
+    cmds:
+      - task: build
+      - docker tag cdi-registry-importer:latest ${DECKHOUSE_REGISTRY_IMPORTER_IMAGE}
+      - docker push ${DECKHOUSE_REGISTRY_IMPORTER_IMAGE}
+
+  lint:
+    desc: "Run linters locally"
+    cmds:
+      - task: lint:go
+
+  lint:go:
+    desc: "Run golangci-lint"
+    deps:
+      - _ensure:golangci-lint
+    cmds:
+      - |
+        golangci-lint run --sort-results
+
+  _ensure:golangci-lint:
+    desc: "Ensure golangci-lint is available"
+    cmds:
+      - |
+        echo -e >&2 "Please install golangci-lint https://golangci-lint.run/usage/install/"
+        exit 1
+    status:
+      - |
+        [ -f ./golangci-lint ] || which golangci-lint

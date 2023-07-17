@@ -115,6 +115,18 @@ func (ud *UploadDataSource) Close() error {
 	return nil
 }
 
+func (ud *UploadDataSource) ReadCloser() (io.ReadCloser, error) {
+	return ud.stream, nil
+}
+
+func (aud *UploadDataSource) Length() (int, error) {
+	panic("not implemented")
+}
+
+func (aud *UploadDataSource) Filename() (string, error) {
+	panic("not implemented")
+}
+
 // AsyncUploadDataSource is an asynchronouse version of an upload data source, that returns finished phase instead
 // of going to post upload processing phases.
 type AsyncUploadDataSource struct {
@@ -190,20 +202,6 @@ func (aud *AsyncUploadDataSource) GetURL() *url.URL {
 // GetResumePhase returns the next phase to process when resuming
 func (aud *AsyncUploadDataSource) GetResumePhase() ProcessingPhase {
 	return aud.ResumePhase
-}
-
-func (ud *UploadDataSource) ReadCloser() (io.ReadCloser, error) {
-	if ud.readers == nil {
-		var err error
-		// Hardcoded to only accept kubevirt content type.
-		ud.readers, err = NewFormatReaders(ud.stream, uint64(0))
-		if err != nil {
-			klog.Errorf("Error creating readers: %v", err)
-			return nil, err
-		}
-	}
-
-	return ud.readers.TopReader(), nil
 }
 
 func (aud *AsyncUploadDataSource) ReadCloser() (io.ReadCloser, error) {

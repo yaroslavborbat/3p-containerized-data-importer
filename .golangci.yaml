@@ -1,0 +1,64 @@
+run:
+  timeout: 10m
+  skip-dirs:
+    - pkg
+    - tests
+    - tools
+    - cmd/cdi-cloner
+    - cmd/cdi-importer
+    - cmd/cdi-operator
+    - cmd/cdi-uploadproxy
+    - cmd/cdi-uploadserver
+    - cmd/cdi-apiserver
+    - cmd/cdi-controller
+
+issues:
+  # Show all errors.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude:
+#  - ST1005.*
+  - "don't use an underscore in package name"
+#  - "exported: .*"
+
+linters-settings:
+  gofumpt:
+    extra-rules: true
+  gci:
+    sections:
+      - standard
+      - default
+      - prefix(github.com/deckhouse/)
+  goimports:
+    local-prefixes: github.com/deckhouse/
+  errcheck:
+    ignore: fmt:.*,[rR]ead|[wW]rite|[cC]lose,io:Copy
+
+linters:
+  disable-all: true
+  enable:
+  - asciicheck
+  - bidichk
+  - bodyclose
+  - dogsled
+  - errcheck
+  - errname
+  - errorlint
+  - exportloopref
+  - gci
+  - gocritic
+  - gofmt
+  - gofumpt
+  - goimports
+  - gosimple
+  - govet
+  - ineffassign
+  - misspell
+  - nolintlint
+  - revive
+  - staticcheck
+  - typecheck
+  - unconvert
+  - unparam
+  - unused
+  - whitespace
