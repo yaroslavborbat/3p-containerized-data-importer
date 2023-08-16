@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"github.com/google/uuid"
 	"io"
 	"net/url"
 	"path/filepath"
@@ -27,13 +28,16 @@ type UploadDataSource struct {
 	url *url.URL
 	// contentType expected from the upload content
 	contentType cdiv1.DataVolumeContentType
+
+	contentLength int
 }
 
 // NewUploadDataSource creates a new instance of an UploadDataSource
-func NewUploadDataSource(stream io.ReadCloser, contentType cdiv1.DataVolumeContentType) *UploadDataSource {
+func NewUploadDataSource(stream io.ReadCloser, contentType cdiv1.DataVolumeContentType, contentLength int) *UploadDataSource {
 	return &UploadDataSource{
-		stream:      stream,
-		contentType: contentType,
+		stream:        stream,
+		contentType:   contentType,
+		contentLength: contentLength,
 	}
 }
 
@@ -119,12 +123,12 @@ func (ud *UploadDataSource) ReadCloser() (io.ReadCloser, error) {
 	return ud.stream, nil
 }
 
-func (aud *UploadDataSource) Length() (int, error) {
-	panic("not implemented")
+func (ud *UploadDataSource) Length() (int, error) {
+	return ud.contentLength, nil
 }
 
-func (aud *UploadDataSource) Filename() (string, error) {
-	panic("not implemented")
+func (ud *UploadDataSource) Filename() (string, error) {
+	return "source-stream-" + uuid.New().String(), nil
 }
 
 // AsyncUploadDataSource is an asynchronouse version of an upload data source, that returns finished phase instead

@@ -1,4 +1,4 @@
-package main
+package shared
 
 import (
 	"encoding/base64"
@@ -11,7 +11,7 @@ import (
 	"github.com/docker/cli/cli/config/configfile"
 )
 
-func registryAuthFile(path string) (*configfile.ConfigFile, error) {
+func RegistryAuthFile(path string) (*configfile.ConfigFile, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("error opening auth config file: %w", err)
@@ -26,7 +26,7 @@ func registryAuthFile(path string) (*configfile.ConfigFile, error) {
 	return config, nil
 }
 
-func credsFromRegistryAuthFile(configFile *configfile.ConfigFile, ref string) (string, string, error) {
+func CredsFromRegistryAuthFile(configFile *configfile.ConfigFile, ref string) (string, string, error) {
 	namedRef, err := reference.ParseNormalizedNamed(ref)
 	if err != nil {
 		return "", "", fmt.Errorf("error parsing reference: %w", err)
