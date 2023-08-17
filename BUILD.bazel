@@ -49,6 +49,19 @@ load(
 )
 
 container_bundle(
+    name = "container-images-bundle",
+    images = {
+        "$(container_prefix)/cdi-operator:$(container_tag)": "//cmd/cdi-operator:cdi-operator-image",
+        "$(container_prefix)/cdi-controller:$(container_tag)": "//cmd/cdi-controller:cdi-controller-image",
+        "$(container_prefix)/cdi-apiserver:$(container_tag)": "//cmd/cdi-apiserver:cdi-apiserver-image",
+        "$(container_prefix)/cdi-cloner:$(container_tag)": "//cmd/cdi-cloner:cdi-cloner-image",
+        "$(container_prefix)/cdi-importer:$(container_tag)": "//cmd/cdi-importer:cdi-importer-image",
+        "$(container_prefix)/cdi-uploadproxy:$(container_tag)": "//cmd/cdi-uploadproxy:cdi-uploadproxy-image",
+        "$(container_prefix)/cdi-uploadserver:$(container_tag)": "//cmd/cdi-uploadserver:cdi-uploadserver-image",
+    },
+)
+
+container_bundle(
     name = "test-container-images-amd64",
     images = {
         "$(container_prefix)/cdi-func-test-bad-webserver:$(container_tag)": "//tools/cdi-func-test-bad-webserver:cdi-func-test-bad-webserver-image",
