@@ -17,7 +17,9 @@ limitations under the License.
 package namespaced
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -154,6 +156,16 @@ func createAPIServerDeployment(image, verbosity, pullPolicy string, imagePullSec
 			corev1.ResourceMemory: resource.MustParse("150Mi"),
 		},
 	}
+
+	var nodeSelector map[string]string
+	if err := json.Unmarshal([]byte(os.Getenv("APISERVER_NODESELECTOR")), &nodeSelector); err == nil {
+		deployment.Spec.Template.Spec.NodeSelector = nodeSelector
+	}
+	var tolerations []corev1.Toleration
+	if err := json.Unmarshal([]byte(os.Getenv("APISERVER_TOLERATIONS")), &tolerations); err == nil {
+		deployment.Spec.Template.Spec.Tolerations = tolerations
+	}
+
 	deployment.Spec.Template.Spec.Containers = []corev1.Container{container}
 	deployment.Spec.Template.Spec.Volumes = []corev1.Volume{
 		{
