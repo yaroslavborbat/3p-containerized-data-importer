@@ -214,15 +214,3 @@ func extractBucketAndObject(s string) (string, string) {
 	object := strings.Join(pathSplit[1:], s3FolderSep)
 	return bucket, object
 }
-
-func (sd *S3DataSource) ReadCloser() (io.ReadCloser, error) {
-	panic("not implemented")
-}
-
-func (sd *S3DataSource) Length() (int, error) {
-	panic("not implemented")
-}
-
-func (sd *S3DataSource) Filename() (string, error) {
-	panic("not implemented")
-}

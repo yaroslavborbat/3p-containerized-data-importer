@@ -17,7 +17,6 @@ limitations under the License.
 package importer
 
 import (
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -203,16 +202,4 @@ func collectCerts(certDir, targetDir, targetPrefix string) error {
 		}
 	}
 	return nil
-}
-
-func (rd *RegistryDataSource) ReadCloser() (io.ReadCloser, error) {
-	panic("not implemented")
-}
-
-func (rd *RegistryDataSource) Length() (int, error) {
-	panic("not implemented")
-}
-
-func (rd *RegistryDataSource) Filename() (string, error) {
-	panic("not implemented")
 }

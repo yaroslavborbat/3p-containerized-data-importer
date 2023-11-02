@@ -204,15 +204,3 @@ func extractGcsBucketObjectAndHost(s string) (string, string, string) {
 	klog.V(3).Infoln("GCS Importer: GCS Object:", object)
 	return bucket, object, host
 }
-
-func (sd *GCSDataSource) ReadCloser() (io.ReadCloser, error) {
-	panic("not implemented")
-}
-
-func (sd *GCSDataSource) Length() (int, error) {
-	panic("not implemented")
-}
-
-func (sd *GCSDataSource) Filename() (string, error) {
-	panic("not implemented")
-}

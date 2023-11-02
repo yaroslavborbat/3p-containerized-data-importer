@@ -1472,15 +1472,3 @@ func getOvirtClient(ep string, accessKey string, secKey string, certDir string) 
 		conn: conn,
 	}, err
 }
-
-func (is *ImageioDataSource) ReadCloser() (io.ReadCloser, error) {
-	panic("not implemented")
-}
-
-func (is *ImageioDataSource) Length() (int, error) {
-	panic("not implemented")
-}
-
-func (is *ImageioDataSource) Filename() (string, error) {
-	panic("not implemented")
-}

@@ -45,6 +45,10 @@ func commandTimeoutContext() (context.Context, context.CancelFunc) {
 	return context.WithCancel(context.Background())
 }
 
+func BuildSourceContext(accessKey, secKey, certDir string, insecureRegistry bool) *types.SystemContext {
+	return buildSourceContext(accessKey, secKey, certDir, insecureRegistry)
+}
+
 func buildSourceContext(accessKey, secKey, certDir string, insecureRegistry bool) *types.SystemContext {
 	ctx := &types.SystemContext{}
 	if accessKey != "" && secKey != "" {
@@ -64,6 +68,10 @@ func buildSourceContext(accessKey, secKey, certDir string, insecureRegistry bool
 	}
 
 	return ctx
+}
+
+func ReadImageSource(ctx context.Context, sys *types.SystemContext, img string) (types.ImageSource, error) {
+	return readImageSource(ctx, sys, img)
 }
 
 func readImageSource(ctx context.Context, sys *types.SystemContext, img string) (types.ImageSource, error) {
@@ -100,6 +108,18 @@ func closeImage(src types.ImageSource) {
 	if err := src.Close(); err != nil {
 		klog.Warningf("Could not close image source: %v ", err)
 	}
+}
+
+func HasPrefix(path string, pathPrefix string) bool {
+	return hasPrefix(path, pathPrefix)
+}
+
+func IsWhiteout(path string) bool {
+	return isWhiteout(path)
+}
+
+func IsDir(hdr *tar.Header) bool {
+	return isDir(hdr)
 }
 
 func hasPrefix(path string, pathPrefix string) bool {

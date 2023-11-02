@@ -27,7 +27,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"regexp"
@@ -1083,16 +1082,4 @@ func (vs *VDDKDataSource) TransferFile(fileName string) (ProcessingPhase, error)
 	}
 
 	return ProcessingPhaseResize, nil
-}
-
-func (vs *VDDKDataSource) ReadCloser() (io.ReadCloser, error) {
-	panic("not implemented")
-}
-
-func (vs *VDDKDataSource) Length() (int, error) {
-	panic("not implemented")
-}
-
-func (vs *VDDKDataSource) Filename() (string, error) {
-	panic("not implemented")
 }
